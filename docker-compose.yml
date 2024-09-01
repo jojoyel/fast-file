@@ -10,4 +10,4 @@ services:
     volumes:
       - "./files:/usr/src/app/files"
       - "./keys:/usr/src/app/keys"
-    command: sh -c "sudo rm -rf /usr/src/app/tmp/*"
+    command: sh -c "rm -rf /usr/src/app/tmp/*"
