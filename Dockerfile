@@ -11,6 +11,8 @@ COPY package*.json ./
 RUN npm install
 
 RUN mkdir -p /usr/src/app/files
+RUN mkdir -p /usr/src/app/tmp
+RUN mkdir -p /usr/src/app/keys
 
 # Step 5: Copy the application code to the working directory
 COPY . .

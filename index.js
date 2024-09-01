@@ -1,59 +1,124 @@
 const express = require('express')
+const fileUpload = require('express-fileupload')
 const bodyParser = require('body-parser')
-const fs = require('fs').promises
+const fs = require('fs')
 const path = require('path')
 const uuid = require('uuid')
 
-const sched = require('./schedule')
+require('dotenv').config()
+require('./schedule')
 
-var app = express()
+const app = express()
 
-app.use(bodyParser.json())
+const saveFolderName = process.env.FOLDER || 'files'
 
-app.use(express.raw({ type: '*/*', limit: '5mb' }))
+// Middlewares
+app.use(bodyParser.json({ limit: '6mb' }))
+app.use(fileUpload({
+    limits: {fileSize: 5 * 1024 * 1024},
 
-app.use((err, req, res, next) => {
-    if (err.type === 'entity.too.large') {
-        res.status(413).send('Custom Error: Payload Too Large. Maximum allowed size is 5MB.')
-    } else {
-        next(err)
-    }
+    useTempFiles: true,
+    tempFileDir: './tmp/'
+}))
+
+// Send html form on root
+app.get("/", (req, res) => {
+    res.sendFile(path.join(__dirname, 'upload.html'))
 })
 
 app.post('/upload', async (req, res, next) => {
+    if (req.body.apikey === undefined)
+        return res.status(400).send({result: 'Missing apikey'})
+
+    const apikey = req.body.apikey
+
+    const apikeys = JSON.parse(fs.readFileSync(path.join(__dirname, 'keys', 'keys.json'), 'utf8').toString())
+
+    const foundApikey = apikeys.find(i => i.key === apikey)
+
+    if (foundApikey === undefined)
+        return res.status(400).send({result: 'Wrong apikey'})
 
     const originalFileName = req.body.filename
 
     if (originalFileName === undefined)
-        return res.status(400).send("Missing filename")
+        return res.status(400).send({result: 'Missing filename'})
+
+    const fileContent = Buffer.from(req.body.content, 'base64')
+    console.log(fileContent)
+
+    if (fileContent * 6 > 1024 * 1024 * 5)
+        return res.status(413).send('File is too large.')
 
     const fileName = uuid.v4()
-    const filePath = path.join(__dirname, 'files', fileName)
-    const infoFilePath = path.join(__dirname, 'files', `${fileName}.INFO`)
+    const filePath = path.join(__dirname, saveFolderName, fileName)
+    const infoFilePath = path.join(__dirname, saveFolderName, `${fileName}.INFO`)
 
     try {
-        await fs.writeFile(filePath, Buffer.from(req.body.content, 'base64'))
+        await fs.promises.writeFile(filePath, fileContent)
 
-        await fs.writeFile(infoFilePath, originalFileName)
+        fs.writeFileSync(infoFilePath, originalFileName)
 
-        return res.status(200).send(fileName)
+        return res.status(200).send({result: fileName})
     } catch (err) {
         console.error('Error writing file:', err)
-        return res.status(500).send('Error writing file')
+        return res.status(500).send({result: 'Error writing file'})
     }
 })
 
-app.get('/download/:filename', async (req, res, next) => {
-    const filename = req.params.filename
-    
-    if (filename === undefined || filename.endsWith(".INFO"))
-        return res.status(400).send("U DONKEY")
+app.post('/uploadfile', async (req, res, next) => {
+    if (req.body.apikey === undefined)
+        return res.status(400).send({result: 'Missing apikey'})
+
+    const apikey = req.body.apikey
+
+    const apikeys = JSON.parse(fs.readFileSync(path.join(__dirname, 'keys', 'keys.json'), 'utf8').toString())
+
+    const foundApikey = apikeys.find(i => i.key === apikey)
+
+    if (foundApikey === undefined)
+        return res.status(400).send({result: 'Wrong apikey'})
+
+    if (!req.files || !req.files.file || Object.keys(req.files).length === 0)
+        return res.status(422).send({result: 'No files were uploaded'})
+
+    if (req.files.file.truncated)
+        return res.status(413).send('File is too large.')
+
+    const fileName = uuid.v4()
+    const filePath = path.join(__dirname, saveFolderName, fileName)
+    const infoFilePath = path.join(__dirname, saveFolderName, `${fileName}.INFO`)
+
+    const uploadedFile = req.files.file;
 
     try {
-        const filePath = path.join(__dirname, 'files', filename)
-        const filePathInfo = path.join(__dirname, 'files', `${filename}.INFO`)
+        await uploadedFile.mv(filePath, (err) => {
+            if (err) {
+                console.error('Error writing file:', err)
+                return res.status(500).send({result: 'Error writing file'})
+            }
+        })
 
-        var realFileName = await fs.readFile(filePathInfo, "utf8")
+        fs.writeFileSync(infoFilePath, uploadedFile.name)
+
+        return res.status(200).send({result: fileName})
+    } catch (err) {
+        console.error('Error writing file:', err)
+        return res.status(500).send({result: 'Error writing file'})
+    }
+})
+
+app.get('/download/:fileId', async (req, res, next) => {
+    const id = req.params.fileId
+
+    if (id === undefined || id.endsWith(".INFO"))
+        return res.status(400).send({result: 'Invalid id'})
+
+    try {
+        const filePath = path.join(__dirname, saveFolderName, id)
+        const filePathInfo = path.join(__dirname, saveFolderName, `${id}.INFO`)
+
+        const realFileName = fs.readFileSync(filePathInfo, "utf8");
 
         console.log("real name", realFileName)
 
@@ -61,17 +126,19 @@ app.get('/download/:filename', async (req, res, next) => {
         res.download(filePath, realFileName, (err) => {
             if (err) {
                 console.error('Error sending file:', err)
-                res.status(404).send('File not found')
+                res.status(404).send({result: 'File not found'})
             } else {
-                console.log('File sent:', filename)
+                console.log('File sent:', id)
             }
         })
     } catch (err) {
         console.error(err)
-        return res.status(500).send("No")
+        return res.status(500).send({result: 'File not found'})
     }
 })
 
-app.listen(3002, () => {
-    console.log("Listening closely . . .")
+const port = process.env.PORT || 3002
+
+app.listen(port, () => {
+    console.log(`Listening closely (port ${port}) . . .`)
 })

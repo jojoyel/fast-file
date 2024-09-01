@@ -5,5 +5,9 @@ services:
     restart: unless-stopped
     ports:
       - "3002:3002"
+    env_file:
+      - ".env"
     volumes:
       - "./files:/usr/src/app/files"
+      - "./keys:/usr/src/app/keys"
+    command: sh -c "sudo rm -rf /usr/src/app/tmp/*"
